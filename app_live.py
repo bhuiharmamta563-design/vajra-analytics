@@ -19,9 +19,9 @@ source = st.sidebar.radio("Source", ["Yahoo (delayed)", "Upstox (live)", "Zerodh
 refresh_sec = st.sidebar.slider("Refresh every (seconds)", 1, 30, 3)
 
 st.sidebar.header("Option chain base levels")
-cip = st.sidebar.number_input("CIP", value=22700.0, step=50.0)
+cip = st.sidebar.number_input("CIP", value=23800.0, step=50.0)
 same = st.sidebar.checkbox("Use CIP for PIP too", value=False)
-pip = cip if same else st.sidebar.number_input("PIP", value=22700.0, step=50.0)
+pip = cip if same else st.sidebar.number_input("PIP", value=23800.0, step=50.0)
 
 st.sidebar.header("Mode and zone size")
 stock_mode = st.sidebar.checkbox("Stock Mode (tick for stocks)", value=False)
@@ -52,10 +52,10 @@ def get_zones():
     else:
         gap, width, step = gap_pts, width_pts, step_pts
     return {
-        "Supply 1 Zone": (cip + gap, cip + gap + width, "orange"),
-        "Supply 2 Zone": (cip + gap + step, cip + gap + step + width, "red"),
-        "Demand 1 Zone": (pip - gap - width, pip - gap, "green"),
-        "Demand 2 Zone": (pip - gap - step - width, pip - gap - step, "teal"),
+        "Supply 1 Zone": (cip + gap, cip + gap + width),
+        "Supply 2 Zone": (cip + gap + step, cip + gap + step + width),
+        "Demand 1 Zone": (pip - gap - width, pip - gap),
+        "Demand 2 Zone": (pip - gap - step - width, pip - gap - step),
     }
 
 
@@ -129,17 +129,35 @@ except Exception as e:
     st.stop()
 
 # ---------- Show ----------
+zone_colors = {
+    "Supply 1 Zone": "#FF9800",
+    "Supply 2 Zone": "#F44336",
+    "Demand 1 Zone": "#00C853",
+    "Demand 2 Zone": "#26A69A",
+}
+
 if data is None or data.empty:
     st.warning("No data yet. Market may be closed, or wait for the next refresh.")
 else:
     fig = go.Figure(go.Candlestick(
         x=data.index, open=data["Open"], high=data["High"], low=data["Low"], close=data["Close"],
+        increasing_line_color="#26a69a", increasing_fillcolor="#26a69a",
+        decreasing_line_color="#ef5350", decreasing_fillcolor="#ef5350",
     ))
-    for name, (lo, hi, color) in zones.items():
-        fig.add_hrect(y0=lo, y1=hi, fillcolor=color, opacity=0.2, line_width=0,
-                      annotation_text=name, annotation_position="top right")
+    for name, (lo, hi) in zones.items():
+        c = zone_colors[name]
+        fig.add_hrect(y0=lo, y1=hi, fillcolor=c, opacity=0.30, line_width=1, line_color=c)
+        fig.add_annotation(
+            xref="paper", x=1, y=(lo + hi) / 2, text=name, showarrow=False,
+            xanchor="left", font=dict(color="white", size=11), bgcolor=c, borderpad=3,
+        )
+    fig.add_hline(y=cip, line_dash="dot", line_color="#EF5350",
+                  annotation_text="CIP", annotation_position="top left")
+    fig.add_hline(y=pip, line_dash="dot", line_color="#00C853",
+                  annotation_text="PIP", annotation_position="bottom left")
+    fig.add_hline(y=last_price, line_dash="dash", line_color="#2962FF", line_width=1)
     fig.update_layout(height=650, xaxis_rangeslider_visible=False,
-                      margin=dict(l=10, r=10, t=30, b=10), uirevision="keep")
+                      margin=dict(l=10, r=120, t=30, b=10), uirevision="keep")
     st.plotly_chart(fig, use_container_width=True)
 
     c1, c2, c3 = st.columns(3)
@@ -147,7 +165,7 @@ else:
     c2.metric("CIP", f"{cip:g}")
     c3.metric("PIP", f"{pip:g}")
 
-    for name, (lo, hi, _) in zones.items():
+    for name, (lo, hi) in zones.items():
         if lo <= last_price <= hi:
             st.warning(f"Price is inside {name} ({lo:.2f} - {hi:.2f})")
 
