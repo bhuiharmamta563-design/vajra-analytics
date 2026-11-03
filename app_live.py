@@ -1,172 +1,216 @@
-"""Vajra Analytics (Clone) - LIVE version for Streamlit.
-Chart tool only, not trading advice.
-"""
-from datetime import datetime
-
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
-from streamlit_autorefresh import st_autorefresh
+from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="Vajra Analytics LIVE", layout="wide")
-st.title("VAJRA ANALYTICS (Clone) - Live")
-st.caption("Chart tool only, not trading advice.")
+st.set_page_config(page_title="VAJRA ANALYTICS", layout="wide", page_icon="⚡")
 
-# ---------- Sidebar ----------
-st.sidebar.header("Data source")
-source = st.sidebar.radio("Source", ["Yahoo (delayed)", "Upstox (live)", "Zerodha Kite (live)"])
-refresh_sec = st.sidebar.slider("Refresh every (seconds)", 1, 30, 3)
+# ---------- TradingView-style palette ----------
+THEMES = {
+    "Dark": dict(bg="#131722", grid="#2a2e39", text="#d1d4dc", tmpl="plotly_dark"),
+    "Light": dict(bg="#ffffff", grid="#e0e3eb", text="#131722", tmpl="plotly_white"),
+}
+UP, DOWN = "#26a69a", "#ef5350"
 
-st.sidebar.header("Option chain base levels")
-cip = st.sidebar.number_input("CIP", value=23800.0, step=50.0)
-same = st.sidebar.checkbox("Use CIP for PIP too", value=False)
-pip = cip if same else st.sidebar.number_input("PIP", value=23800.0, step=50.0)
+st.markdown(
+    "<style>.block-container{padding-top:1.2rem;padding-bottom:0.5rem}</style>",
+    unsafe_allow_html=True,
+)
 
-st.sidebar.header("Mode and zone size")
-stock_mode = st.sidebar.checkbox("Stock Mode (tick for stocks)", value=False)
-gap_pts = st.sidebar.number_input("Gap from CIP/PIP (points)", value=20.0)
-width_pts = st.sidebar.number_input("Zone width (points)", value=20.0)
-step_pts = st.sidebar.number_input("Zone 1 to Zone 2 distance (points)", value=40.0)
-pct = st.sidebar.number_input("Stock mode base %", value=0.1, step=0.05)
+# ---------------- Sidebar ----------------
+with st.sidebar:
+    st.header("⚡ VAJRA ANALYTICS")
+    preset = st.selectbox("Instrument", ["NIFTY 50", "BANKNIFTY", "Custom (stock)"])
+    custom = ""
+    if preset == "Custom (stock)":
+        custom = st.text_input("NSE symbol (e.g. RELIANCE)", "RELIANCE").strip().upper()
+    stock_mode = preset == "Custom (stock)"
 
-if source.startswith("Yahoo"):
-    symbol = st.sidebar.text_input("Yahoo ticker", value="^NSEI")
-else:
-    if source.startswith("Upstox"):
-        symbol = st.sidebar.text_input("Upstox instrument key", value="NSE_INDEX|Nifty 50")
-    else:
-        symbol = st.sidebar.text_input("Kite symbol", value="NSE:NIFTY 50")
-    candle_min = st.sidebar.selectbox("Candle size (minutes)", [1, 3, 5, 15], index=0)
-    if st.sidebar.button("Clear collected ticks"):
-        st.session_state.pop("ticks", None)
+    st.subheader("Option chain levels")
+    d_cip, d_pip = {"NIFTY 50": (23300.0, 23200.0), "BANKNIFTY": (51500.0, 51000.0)}.get(
+        preset, (3000.0, 2900.0))
+    cip = st.number_input("CIP (Call important price)", value=d_cip, step=5.0)
+    pip = st.number_input("PIP (Put important price)", value=d_pip, step=5.0)
 
-st_autorefresh(interval=refresh_sec * 1000, key="auto_refresh")
-
-
-# ---------- Helpers ----------
-def get_zones():
+    st.subheader("Zone size")
     if stock_mode:
-        gap = width = cip * pct / 100
-        step = cip * pct / 50
+        p1 = st.number_input("Zone 1 width (%)", value=0.5, step=0.1)
+        p2 = st.number_input("Zone 2 width (%)", value=1.0, step=0.1)
+        w1c, w2c, w1p, w2p = cip * p1 / 100, cip * p2 / 100, pip * p1 / 100, pip * p2 / 100
     else:
-        gap, width, step = gap_pts, width_pts, step_pts
-    return {
-        "Supply 1 Zone": (cip + gap, cip + gap + width),
-        "Supply 2 Zone": (cip + gap + step, cip + gap + step + width),
-        "Demand 1 Zone": (pip - gap - width, pip - gap),
-        "Demand 2 Zone": (pip - gap - step - width, pip - gap - step),
-    }
+        w1 = st.number_input("Zone 1 width (points)", value=25.0, step=5.0)
+        w2 = st.number_input("Zone 2 width (points)", value=50.0, step=5.0)
+        w1c = w1p = w1
+        w2c = w2p = w2
+
+    st.subheader("Chart settings")
+    interval = st.selectbox("Timeframe", ["1m", "5m", "15m", "30m", "1h", "1d"], index=2)
+    chart_type = st.selectbox("Chart type", ["Candles", "Heikin Ashi", "OHLC bars", "Line"])
+    theme = st.radio("Theme", list(THEMES), horizontal=True)
+    height = st.slider("Chart height (px)", 400, 1100, 700, 50)
+    bars = st.slider("Bars to show", 30, 500, 150, 10)
+    show_zones = st.checkbox("Show zones", True)
+    zone_op = st.slider("Zone opacity", 0.05, 0.6, 0.22, 0.01)
+    show_vol = st.checkbox("Volume", True)
+    ema_on = st.multiselect("EMA", [9, 20, 50, 200], default=[20])
+    show_last = st.checkbox("Last price line", True)
+    refresh = st.button("🔄 Refresh data", use_container_width=True)
+
+T = THEMES[theme]
+ticker = {"NIFTY 50": "^NSEI", "BANKNIFTY": "^NSEBANK"}.get(preset, f"{custom}.NS")
+period = {"1m": "5d", "5m": "30d", "15m": "30d", "30m": "60d", "1h": "180d", "1d": "2y"}[interval]
 
 
-def yahoo_candles(ticker):
-    df = yf.download(ticker, period="1d", interval="1m", progress=False)
+@st.cache_data(ttl=60, show_spinner="Data aa raha hai...")
+def load(tkr, period, interval):
+    df = yf.download(tkr, period=period, interval=interval, progress=False, auto_adjust=False)
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     return df.dropna()
 
 
-@st.cache_resource
-def kite_client():
-    from kiteconnect import KiteConnect
-
-    kite = KiteConnect(api_key=st.secrets["KITE_API_KEY"])
-    kite.set_access_token(st.secrets["KITE_ACCESS_TOKEN"])
-    return kite
-
-
-def to_candles(ltp, minutes):
-    ticks = st.session_state.setdefault("ticks", [])
-    ticks.append((datetime.now(), ltp))
-    df = pd.DataFrame(ticks, columns=["t", "p"]).set_index("t")
-    ohlc = df["p"].resample(f"{minutes}min").ohlc()
-    ohlc.columns = ["Open", "High", "Low", "Close"]
-    return ohlc.dropna(), ltp
+def heikin_ashi(d):
+    ha = d.copy()
+    ha["Close"] = (d["Open"] + d["High"] + d["Low"] + d["Close"]) / 4
+    o = [(d["Open"].iloc[0] + d["Close"].iloc[0]) / 2]
+    for i in range(1, len(d)):
+        o.append((o[-1] + ha["Close"].iloc[i - 1]) / 2)
+    ha["Open"] = o
+    ha["High"] = pd.concat([d["High"], ha["Open"], ha["Close"]], axis=1).max(axis=1)
+    ha["Low"] = pd.concat([d["Low"], ha["Open"], ha["Close"]], axis=1).min(axis=1)
+    return ha
 
 
-def kite_candles(sym, minutes):
-    ltp = float(kite_client().ltp([sym])[sym]["last_price"])
-    return to_candles(ltp, minutes)
+def build_fig(df, full, cip, pip, w1c, w2c, w1p, w2p):
+    rows = 2 if show_vol and "Volume" in df and df["Volume"].sum() > 0 else 1
+    fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.02,
+                        row_heights=[0.8, 0.2] if rows == 2 else [1.0])
+    src = heikin_ashi(df) if chart_type == "Heikin Ashi" else df
 
-
-def upstox_candles(instrument_key, minutes):
-    import requests
-
-    resp = requests.get(
-        "https://api.upstox.com/v2/market-quote/ltp",
-        params={"instrument_key": instrument_key},
-        headers={
-            "Accept": "application/json",
-            "Authorization": f"Bearer {st.secrets['UPSTOX_ACCESS_TOKEN']}",
-        },
-        timeout=5,
-    )
-    resp.raise_for_status()
-    body = resp.json().get("data", {})
-    if not body:
-        raise ValueError("Upstox returned no data. Check the instrument key and token.")
-    ltp = float(next(iter(body.values()))["last_price"])
-    return to_candles(ltp, minutes)
-
-
-# ---------- Fetch data ----------
-zones = get_zones()
-last_price = None
-try:
-    if source.startswith("Yahoo"):
-        data = yahoo_candles(symbol)
-        if not data.empty:
-            last_price = float(data["Close"].iloc[-1])
-    elif source.startswith("Upstox"):
-        data, last_price = upstox_candles(symbol, candle_min)
+    if chart_type == "Line":
+        fig.add_trace(go.Scatter(x=df.index, y=df["Close"], mode="lines",
+                                 line=dict(color="#2962ff", width=2), name="Close"), row=1, col=1)
+    elif chart_type == "OHLC bars":
+        fig.add_trace(go.Ohlc(x=src.index, open=src["Open"], high=src["High"], low=src["Low"],
+                              close=src["Close"], increasing_line_color=UP,
+                              decreasing_line_color=DOWN, name="Price"), row=1, col=1)
     else:
-        data, last_price = kite_candles(symbol, candle_min)
-except KeyError:
-    st.error("Broker keys missing. Add them in Streamlit Secrets. Access tokens must be renewed every day.")
-    st.stop()
-except Exception as e:
-    st.error(f"Data error: {e}")
-    st.stop()
+        fig.add_trace(go.Candlestick(x=src.index, open=src["Open"], high=src["High"],
+                                     low=src["Low"], close=src["Close"],
+                                     increasing_line_color=UP, increasing_fillcolor=UP,
+                                     decreasing_line_color=DOWN, decreasing_fillcolor=DOWN,
+                                     name="Price"), row=1, col=1)
 
-# ---------- Show ----------
-zone_colors = {
-    "Supply 1 Zone": "#FF9800",
-    "Supply 2 Zone": "#F44336",
-    "Demand 1 Zone": "#00C853",
-    "Demand 2 Zone": "#26A69A",
+    colors = {9: "#f9a825", 20: "#2962ff", 50: "#ab47bc", 200: "#e91e63"}
+    for n in ema_on:
+        e = full["Close"].ewm(span=n, adjust=False).mean().loc[df.index]
+        fig.add_trace(go.Scatter(x=df.index, y=e, mode="lines", name=f"EMA {n}",
+                                 line=dict(color=colors[n], width=1.3)), row=1, col=1)
+
+    if rows == 2:
+        vcol = np.where(df["Close"] >= df["Open"], UP, DOWN)
+        fig.add_trace(go.Bar(x=df.index, y=df["Volume"], marker_color=vcol, opacity=0.6,
+                             name="Volume", showlegend=False), row=2, col=1)
+
+    # ----- Zones + CIP/PIP -----
+    if show_zones:
+        zones = [("Supply 2", cip + w1c, cip + w2c, "#ef5350"),
+                 ("Supply 1", cip, cip + w1c, "#ff9800"),
+                 ("Demand 1", pip - w1p, pip, "#26a69a"),
+                 ("Demand 2", pip - w2p, pip - w1p, "#00897b")]
+        for name, lo, hi, col in zones:
+            fig.add_hrect(y0=lo, y1=hi, fillcolor=col, opacity=zone_op, line_width=0,
+                          row=1, col=1, annotation_text=f"{name}  {lo:,.0f}–{hi:,.0f}",
+                          annotation_position="top left",
+                          annotation_font=dict(size=11, color=T["text"]))
+        fig.add_hline(y=cip, line_dash="dash", line_color="#ff9800", line_width=1,
+                      row=1, col=1, annotation_text="CIP", annotation_position="bottom right")
+        fig.add_hline(y=pip, line_dash="dash", line_color="#26a69a", line_width=1,
+                      row=1, col=1, annotation_text="PIP", annotation_position="top right")
+
+    ltp, prev = float(df["Close"].iloc[-1]), float(df["Open"].iloc[-1])
+    if show_last:
+        fig.add_hline(y=ltp, line_dash="dot", line_width=1,
+                      line_color=UP if ltp >= prev else DOWN, row=1, col=1,
+                      annotation_text=f"{ltp:,.2f}", annotation_position="right",
+                      annotation_font=dict(color="white", size=11),
+                      annotation_bgcolor=UP if ltp >= prev else DOWN)
+
+    # ----- Y range: price + zones so everything is visible -----
+    lo_y = min(df["Low"].min(), pip - w2p if show_zones else df["Low"].min())
+    hi_y = max(df["High"].max(), cip + w2c if show_zones else df["High"].max())
+    pad = (hi_y - lo_y) * 0.04
+
+    fig.update_layout(
+        template=T["tmpl"], paper_bgcolor=T["bg"], plot_bgcolor=T["bg"],
+        font=dict(color=T["text"]), height=height, margin=dict(l=8, r=8, t=30, b=8),
+        dragmode="pan", hovermode="x unified", xaxis_rangeslider_visible=False,
+        legend=dict(orientation="h", y=1.02, x=0), uirevision=f"{ticker}-{interval}",
+        newshape=dict(line_color="#ffeb3b"),
+    )
+    breaks = [dict(bounds=["sat", "mon"])]
+    if interval != "1d":
+        breaks.append(dict(bounds=[15.5, 9.25], pattern="hour"))   # NSE hours (IST)
+    fig.update_xaxes(showgrid=True, gridcolor=T["grid"], rangebreaks=breaks, showspikes=True,
+                     spikemode="across", spikesnap="cursor", spikethickness=1,
+                     spikedash="dot", spikecolor="#9598a1")
+    fig.update_yaxes(showgrid=True, gridcolor=T["grid"], side="right", showspikes=True,
+                     spikemode="across", spikethickness=1, spikedash="dot", spikecolor="#9598a1")
+    fig.update_yaxes(range=[lo_y - pad, hi_y + pad], row=1, col=1)
+    return fig
+
+
+if refresh:
+    st.cache_data.clear()
+
+full = load(ticker, period, interval)
+if full.empty:
+    st.error(f"'{ticker}' ka data nahi mila. Symbol ya timeframe check karo.")
+    st.stop()
+df = full.tail(bars)
+
+if pip >= cip:
+    st.warning("Normally PIP, CIP se neeche hota hai. Values check kar lo.")
+
+# ---------- Header strip ----------
+ltp = float(df["Close"].iloc[-1])
+chg = ltp - float(full["Close"].iloc[-2]) if len(full) > 1 else 0.0
+h1, h2, h3, h4 = st.columns([2, 1, 1, 1])
+h1.subheader(f"{ticker}  ·  {interval}")
+h2.metric("LTP", f"{ltp:,.2f}", f"{chg:+,.2f}")
+h3.metric("To CIP", f"{cip - ltp:,.1f}")
+h4.metric("To PIP", f"{ltp - pip:,.1f}")
+
+fig = build_fig(df, full, cip, pip, w1c, w2c, w1p, w2p)
+
+config = {
+    "scrollZoom": True,            # mouse wheel / pinch zoom
+    "displaylogo": False,
+    "doubleClick": "reset+autosize",
+    "displayModeBar": True,
+    "modeBarButtonsToAdd": ["drawline", "drawopenpath", "drawrect", "eraseshape"],
+    "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+    "toImageButtonOptions": {"format": "png", "filename": "vajra_chart", "scale": 2},
 }
+st.plotly_chart(fig, width="stretch", config=config)
 
-if data is None or data.empty:
-    st.warning("No data yet. Market may be closed, or wait for the next refresh.")
+st.caption(
+    "🖱️ Wheel/pinch = zoom · Drag = pan · Double-click = reset · Toolbar: 🔍+ / 🔍− zoom, "
+    "Autoscale, Draw line/rect, Camera = PNG · ⛶ Fullscreen: chart par hover karke "
+    "upar-right ka expand icon dabao."
+)
+
+if ltp > cip + w2c:
+    st.error("🚀 Price Supply 2 ke upar — strong breakout")
+elif ltp > cip:
+    st.warning("📈 Price Supply zone ke andar — resistance area")
+elif ltp < pip - w2p:
+    st.error("🔻 Price Demand 2 ke neeche — strong breakdown")
+elif ltp < pip:
+    st.success("📉 Price Demand zone ke andar — support area")
 else:
-    fig = go.Figure(go.Candlestick(
-        x=data.index, open=data["Open"], high=data["High"], low=data["Low"], close=data["Close"],
-        increasing_line_color="#26a69a", increasing_fillcolor="#26a69a",
-        decreasing_line_color="#ef5350", decreasing_fillcolor="#ef5350",
-    ))
-    for name, (lo, hi) in zones.items():
-        c = zone_colors[name]
-        fig.add_hrect(y0=lo, y1=hi, fillcolor=c, opacity=0.30, line_width=1, line_color=c)
-        fig.add_annotation(
-            xref="paper", x=1, y=(lo + hi) / 2, text=name, showarrow=False,
-            xanchor="left", font=dict(color="white", size=11), bgcolor=c, borderpad=3,
-        )
-    fig.add_hline(y=cip, line_dash="dot", line_color="#EF5350",
-                  annotation_text="CIP", annotation_position="top left")
-    fig.add_hline(y=pip, line_dash="dot", line_color="#00C853",
-                  annotation_text="PIP", annotation_position="bottom left")
-    fig.add_hline(y=last_price, line_dash="dash", line_color="#2962FF", line_width=1)
-    fig.update_layout(height=650, xaxis_rangeslider_visible=False,
-                      margin=dict(l=10, r=120, t=30, b=10), uirevision="keep")
-    st.plotly_chart(fig, use_container_width=True)
+    st.info("↔️ Price PIP aur CIP ke beech (range-bound)")
+st.caption("Sirf educational use ke liye. Ye financial advice nahi hai.")
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Last price", f"{last_price:,.2f}")
-    c2.metric("CIP", f"{cip:g}")
-    c3.metric("PIP", f"{pip:g}")
-
-    for name, (lo, hi) in zones.items():
-        if lo <= last_price <= hi:
-            st.warning(f"Price is inside {name} ({lo:.2f} - {hi:.2f})")
-
-    st.caption(f"Updated: {datetime.now().strftime('%H:%M:%S')} | Source: {source}")
