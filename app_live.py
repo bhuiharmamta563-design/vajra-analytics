@@ -122,7 +122,7 @@ with st.sidebar:
     stock_mode = preset == "Custom (stock)"
 
     st.subheader("Option chain levels")
-    st.button("📡 NSE se CIP/PIP lao", on_click=on_fetch, type="primary", use_container_width=True)
+    st.button("📡 NSE se CIP/PIP lao", on_click=on_fetch, type="primary", width="stretch")
     st.selectbox("CIP/PIP kis basis par", list(BASIS), key="basis", on_change=apply_levels)
     if st.session_state.get("chain"):
         st.selectbox("Expiry", st.session_state["chain"]["expiries"], key="exp_sel", on_change=apply_levels)
@@ -168,9 +168,9 @@ with st.sidebar:
     extra = st.text_input("Extra price levels (comma se alag)", "", placeholder="23350, 23100")
     if "clear_n" not in st.session_state:
         st.session_state.clear_n = 0
-    if st.button("🗑️ Clear all drawings", use_container_width=True):
+    if st.button("🗑️ Clear all drawings", width="stretch"):
         st.session_state.clear_n += 1
-    refresh = st.button("🔄 Refresh data", use_container_width=True)
+    refresh = st.button("🔄 Refresh data", width="stretch")
 
     # ---------- Reversal calculator inputs ----------
     with st.expander("🧮 Reversal Calculator (EOS / EOR)", expanded=True):
@@ -228,7 +228,7 @@ with st.sidebar:
     if pdf_path.exists():
         st.download_button("⬇️ Full PDF kholo / download", pdf_path.read_bytes(),
                            file_name=pdf_path.name, mime="application/pdf",
-                           use_container_width=True)
+                           width="stretch")
 
 T = THEMES[theme]
 ticker = {"NIFTY 50": "^NSEI", "BANKNIFTY": "^NSEBANK"}.get(preset, f"{custom}.NS")
@@ -419,14 +419,12 @@ bt = f"{buf_pct:g}% of premium" if buf_pct is not None else "manual points"
 cA, cB = st.columns(2)
 with cA:
     st.markdown("#### 🔴 Upper Reversal (EOR) – Call side")
-    st.markdown(
-        f"1. Strike + Call LTP = {cs:,.0f} + {cltp:,.2f} = **{call_be:,.2f}** (break-even)\n"
-        f"2. Buffer ({bt}) = **{buf_c:,.2f}**\n"
-        f"3. EOR = {call_be:,.2f} − {buf_c:,.2f}"
-    )
+    st.write(f"1. Strike + Call LTP = {cs:,.0f} + {cltp:,.2f} = **{call_be:,.2f}**")
+    st.write(f"2. Buffer ({bt}) = **{buf_c:,.2f}**")
+    st.write(f"3. EOR = {call_be:,.2f} − {buf_c:,.2f} = **{eor:,.2f}**")
     st.metric("EOR", f"{eor:,.2f}", f"{eor - ltp:+,.1f} from LTP", delta_color="off")
 with cB:
     st.markdown("#### 🟢 Lower Reversal (EOS) – Put side")
-    st.markdown(
-        f"1. Strike − Put LTP = {ps:,.0f} − {pltp:,.2f} = **{put_be:,.2f}** (break-even)\n"
-        f"2. Buffer ({b
+    st.write(f"1. Strike − Put LTP = {ps:,.0f} − {pltp:,.2f} = **{put_be:,.2f}**")
+    st.write(f"2. Buffer ({bt}) = **{buf_p:,.2f}**")
+    st.write(f"3. EOS = {put_be:,.2f}
