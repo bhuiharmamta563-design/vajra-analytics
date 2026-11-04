@@ -427,4 +427,67 @@ with cB:
     st.markdown("#### 🟢 Lower Reversal (EOS) – Put side")
     st.write(f"1. Strike − Put LTP = {ps:,.0f} − {pltp:,.2f} = **{put_be:,.2f}**")
     st.write(f"2. Buffer ({bt}) = **{buf_p:,.2f}**")
-    st.write(f"3. EOS = {put_be:,.2f}
+        st.write(f"3. EOS = {put_be:,.2f} + {buf_p:,.2f} = **{eos:,.2f}**")
+    st.metric("EOS", f"{eos:,.2f}", f"{eos - ltp:+,.1f} from LTP", delta_color="off")
+
+summary = pd.DataFrame({
+    "Level": ["EOR", "Call break-even", "LTP", "Put break-even", "EOS"],
+    "Price": [eor, call_be, ltp, put_be, eos],
+})
+summary["LTP se distance"] = summary["Price"] - ltp
+summary["LTP se %"] = summary["LTP se distance"] / ltp * 100
+summary = summary.sort_values("Price", ascending=False)
+st.dataframe(summary.style.format({"Price": "{:,.2f}", "LTP se distance": "{:+,.1f}", "LTP se %": "{:+.2f}%"}),
+             hide_index=True, width="stretch")
+
+near = min([("EOR", eor), ("EOS", eos)], key=lambda t: abs(ltp - t[1]))
+tol = max(ltp * 0.0015, 1)
+if abs(ltp - near[1]) <= tol:
+    side = "resistance se reversal (neeche) ke chances" if near[0] == "EOR" else "support se bounce ke chances"
+    st.success(f"🎯 LTP {near[0]} ({near[1]:,.1f}) ke paas hai → {side} zyada.")
+else:
+    st.info(f"Nearest reversal: **{near[0]} {near[1]:,.1f}** (LTP se {abs(ltp - near[1]):,.1f} points door)")
+
+st.markdown("**Time-decay effect (Change of Reversal):** premium ghatne par EOR/EOS strike ke kareeb aate hain")
+decay = []
+for keep in (100, 75, 50, 25, 10):
+    f = keep / 100
+    decay.append({
+        "Premium bacha": f"{keep}%",
+        "Call LTP": cltp * f, "EOR": cs + cltp * f - buf_c * f,
+        "Put LTP": pltp * f, "EOS": ps - pltp * f + buf_p * f,
+    })
+st.dataframe(pd.DataFrame(decay).style.format({c: "{:,.2f}" for c in ["Call LTP", "EOR", "Put LTP", "EOS"]}),
+             hide_index=True, width="stretch")
+st.caption("Buffer PDF ke hisab se 5–10% Greek/IV buffer hai; PDF ke example mein ~₹12 liya gaya tha, "
+           "isliye 'Manual points' ka option bhi diya hai. IV zyada ho to buffer badhao.")
+
+st.divider()
+st.subheader("📌 Zones")
+zdf = pd.DataFrame([["Supply 2", cip + w1c, cip + w2c], ["Supply 1", cip, cip + w1c],
+                    ["Demand 1", pip - w1p, pip], ["Demand 2", pip - w2p, pip - w1p]],
+                   columns=["Zone", "From", "To"])
+st.dataframe(zdf.style.format({"From": "{:,.2f}", "To": "{:,.2f}"}), hide_index=True,
+             width="stretch")
+
+with st.expander("🛡️ Support-bounce risk plan (sirf educational)"):
+    sl_pts = st.slider("Stop loss (points)", 10, 50, 30, 5)
+    r1, r2, r3, r4 = st.columns(4)
+    r1.metric("Entry (PIP)", f"{pip:,.1f}")
+    r2.metric("Stop loss", f"{pip - sl_pts:,.1f}")
+    r3.metric("Target 1 (1:1.5)", f"{pip + sl_pts * 1.5:,.1f}")
+    r4.metric("Target 2 (1:2)", f"{pip + sl_pts * 2:,.1f}")
+    st.caption("Ye sirf ek fixed formula hai, trade signal ya advice nahi.")
+
+st.divider()
+if ltp > cip + w2c:
+    st.error("🚀 Price Supply 2 ke upar — strong breakout")
+elif ltp > cip:
+    st.warning("📈 Price Supply zone ke andar — resistance area")
+elif ltp < pip - w2p:
+    st.error("🔻 Price Demand 2 ke neeche — strong breakdown")
+elif ltp < pip:
+    st.success("📉 Price Demand zone ke andar — support area")
+else:
+    st.info("↔️ Price PIP aur CIP ke beech (range-bound)")
+st.caption("Sirf educational use ke liye. Ye financial advice nahi hai.")
