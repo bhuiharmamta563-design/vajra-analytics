@@ -1,7 +1,1 @@
-streamlit
-pandas
-plotly
-yfinance
-streamlit-autorefresh
-requests
-kiteconnect
+
